@@ -25,7 +25,7 @@ function fakeTransport(outcome: StreamOutcome, created = true) {
     regenerate: vi.fn(async (_id, h) => { h.onToken("again"); return { type: "done", finishReason: "stop" } as const; }),
     cancel: vi.fn(async () => {}),
   };
-  return t;
+  return Object.assign(t, { sendMessage }) as ChatTransport & { sendMessage: typeof sendMessage };
 }
 
 describe("chat store attachments (demo transport)", () => {
@@ -122,7 +122,7 @@ describe("chat store backend contract", () => {
   it("stop calls server cancel with the generation id and marks the reply cancelled", async () => {
     let release!: (o: StreamOutcome) => void;
     const t = fakeTransport({ type: "done", finishReason: "stop" });
-    t.sendMessage = vi.fn(async (_i, h, signal) => {
+    t.sendMessage = vi.fn<ChatTransport["sendMessage"]>(async (_i, h, signal) => {
       h.onCreated({ conversationId: "c", userMessageId: "u", assistantMessageId: "a", generationId: "g1", title: "t" });
       signal.addEventListener("abort", () => release({ type: "cancelled" }));
       return new Promise<StreamOutcome>((r) => { release = r; });
