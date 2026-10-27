@@ -21,7 +21,7 @@ export interface ChatMessage {
   status: MessageStatus;
   createdAt: string;
   attachments?: ImageAttachment[];
-  error?: string;
+  error?: string | undefined;
 }
 
 export interface Conversation {
@@ -40,7 +40,7 @@ export interface PendingAttachment {
   previewUrl: string;
   progress: number; // 0-100
   state: "ready" | "uploading" | "uploaded" | "error";
-  error?: string;
+  error?: string | undefined;
 }
 
 /**

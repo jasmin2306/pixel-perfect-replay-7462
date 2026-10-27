@@ -192,6 +192,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       const idx = conv?.messages.findIndex((m) => m.id === assistantId) ?? -1;
       if (!conv || idx < 1) return;
       const userMsg = conv.messages[idx - 1];
+      if (!userMsg) return;
       patchMessage(convId, assistantId, { status: "streaming", content: "", error: undefined });
       await runReply(convId, assistantId, userMsg.content, (userMsg.attachments?.length ?? 0) > 0);
     },

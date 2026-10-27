@@ -34,7 +34,7 @@ export function createMockTransport(opts: { shouldFail: () => boolean }): ChatTr
       const failAt = opts.shouldFail() ? Math.floor(words.length * 0.35) : -1;
       for (let i = 0; i < words.length; i++) {
         if (i === failAt) throw new Error("Connection to the AI provider was lost (simulated).");
-        onToken(words[i]);
+        onToken(words[i] ?? "");
         await wait(28, signal);
       }
     },
