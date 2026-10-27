@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, Camera, ImagePlus, RefreshCw, Square, X, AlertCircle } from "lucide-react";
-import { useChatStore } from "@/lib/chat/chat-store";
+import { getTransport, useChatStore } from "@/lib/chat/chat-store";
 import { ACCEPTED_IMAGE_TYPES, formatBytes } from "@/lib/image/validate";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,7 @@ export interface ComposerHandle {
 const ACCEPT = ACCEPTED_IMAGE_TYPES.join(",");
 
 export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
-  const { pending, attachError, isGenerating, isUploading, addFiles, removeAttachment, replaceAttachment, send, stop } = useChatStore();
+  const { pending, attachError, isGenerating, isUploading, isSubmitting, addFiles, removeAttachment, replaceAttachment, send, stop } = useChatStore();
   const [text, setText] = useState("");
   const [hasCamera, setHasCamera] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -42,7 +42,9 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [text]);
 
-  const busy = isGenerating || isUploading;
+  const busy = isSubmitting || isGenerating || isUploading;
+  const [isMock, setIsMock] = useState(true);
+  useEffect(() => setIsMock(getTransport().isMock), []);
   const canSend = !busy && (text.trim().length > 0 || pending.length > 0);
 
   const submit = () => {
@@ -121,8 +123,8 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
             {isUploading ? "Uploading image…" : "JPG, PNG, WEBP, HEIC · up to 10 MB · max 4"}
           </span>
           <div className="ml-auto">
-            {isGenerating ? (
-              <Button type="button" size="icon" variant="secondary" className="size-9 rounded-xl" onClick={stop} aria-label="Stop generating">
+            {isGenerating || isUploading ? (
+              <Button type="button" size="icon" variant="secondary" className="size-9 rounded-xl" onClick={stop} aria-label={isUploading ? "Cancel upload" : "Stop generating"}>
                 <Square className="size-3.5 fill-current" />
               </Button>
             ) : (
@@ -133,7 +135,7 @@ export const Composer = forwardRef<ComposerHandle>(function Composer(_, ref) {
           </div>
         </div>
       </div>
-      <p className="mt-2 text-center text-[11px] text-muted-foreground">Preview build · replies are simulated locally, no AI model is connected.</p>
+      {isMock && <p className="mt-2 text-center text-[11px] text-muted-foreground">Preview build · replies are simulated locally, no AI model is connected.</p>}
 
       <input ref={fileRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />

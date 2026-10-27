@@ -71,8 +71,8 @@ export function MessageBubble({ message, onRetry, canRetry }: { message: ChatMes
         {status === "failed" && (
           <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm">
             <AlertTriangle className="size-4 shrink-0 text-destructive" />
-            <span className="flex-1 text-foreground/90">{message.error ?? "Something went wrong."}</span>
-            {canRetry && <Button size="sm" variant="secondary" className="h-8 gap-1.5" onClick={onRetry}><RotateCcw className="size-3.5" /> Retry</Button>}
+            <span className="flex-1 text-foreground/90">{message.error?.message ?? "Something went wrong."}</span>
+            {canRetry && message.error?.retryable !== false && <Button size="sm" variant="secondary" className="h-8 gap-1.5" onClick={onRetry}><RotateCcw className="size-3.5" /> Retry</Button>}
           </div>
         )}
       </div>

@@ -21,7 +21,7 @@ function ConversationSkeleton() {
 }
 
 export function ChatShell() {
-  const { conversations, activeId, isLoadingConversation, isGenerating, mobileNavOpen, setMobileNavOpen, sidebarCollapsed, toggleSidebar, retry, addFiles, newChat } = useChatStore();
+  const { conversations, activeId, isLoadingConversation, isGenerating, isSubmitting, mobileNavOpen, setMobileNavOpen, sidebarCollapsed, toggleSidebar, retry, addFiles, newChat } = useChatStore();
   const active = conversations.find((c) => c.id === activeId) ?? null;
   const composerRef = useRef<ComposerHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -101,7 +101,7 @@ export function ChatShell() {
           ) : (
             <div className="mx-auto w-full max-w-3xl space-y-7 px-4 py-6 sm:py-8">
               {active.messages.map((m, i) => (
-                <MessageBubble key={m.id} message={m} canRetry={!isGenerating && i === active.messages.length - 1} onRetry={() => void retry(m.id)} />
+                <MessageBubble key={m.id} message={m} canRetry={!isSubmitting && i === active.messages.length - 1} onRetry={() => void retry(m.id)} />
               ))}
             </div>
           )}
