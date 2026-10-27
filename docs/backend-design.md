@@ -77,7 +77,7 @@ GET /readyz   -> 200 {"status":"ok","db":"ok","storage":"ok"} | 503 same shape w
 
 ### Session (anonymous, see D1)
 ```
-POST /sessions -> 201 {"session_token": str, "expires_at": datetime}
+POST /sessions -> 201   # 256-bit random token, stored hashed {"session_token": str, "expires_at": datetime}
 ```
 
 ### Conversations
@@ -114,9 +114,10 @@ Unattached uploads expire after 24 h (cleanup job).
 
 ### Messages + generation stream
 ```
-POST /conversations/{id}/messages
+POST /messages                      # creates the conversation when conversation_id is null (D3 approved)
   Accept: text/event-stream
   body {
+    "conversation_id": uuid | null,
     "content": str (0..8000),
     "attachment_ids": [uuid] (0..4, owned, unattached),
     "client_message_id": str (1..64)     # idempotency key
@@ -257,3 +258,17 @@ Recommended starting point: Fly.io (or Render for $0) + Neon + R2.
 - **D5 HEIC**: client-side conversion vs. server `pillow-heif` (proposed: client-side, server rejects HEIC if not converted).
 - **D6 Hosting**: Render free (cold starts) vs. Fly.io paid-minimal.
 - **D7 Retention**: how long conversations/images are kept for anonymous sessions.
+
+---
+
+## 12. Approved decisions (Step 1 review)
+
+- D1 anonymous sessions with secure random tokens + server-side ownership checks.
+- D2 provider deferred until capability/price comparison.
+- D3 conversation created by the first `POST /messages` (`conversation_id: null`).
+- D4 private object storage for images.
+- D5 consistent HEIC conversion with validation and safe failure.
+- D6 local development first; hosting chosen later.
+- D7 30-day retention proposed; nothing is deleted until the policy is implemented and documented.
+
+Frontend implementation of this contract: `src/lib/api/` (wire models, serializers, SSE parser, HTTP transport) and `src/lib/chat/types.ts` (`ChatTransport`).

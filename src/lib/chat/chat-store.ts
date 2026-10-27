@@ -1,12 +1,26 @@
 import { create } from "zustand";
-import type { ChatMessage, ChatTransport, Conversation, ImageAttachment, PendingAttachment, StreamHandlers, StreamOutcome } from "./types";
+import type {
+  ChatMessage,
+  ChatTransport,
+  Conversation,
+  ImageAttachment,
+  PendingAttachment,
+  StreamHandlers,
+  StreamOutcome,
+} from "./types";
 import { sampleConversations } from "./mock/sample-conversations";
 import { selectTransport } from "./transport";
-import { MAX_IMAGES_PER_MESSAGE, prepareImageForUpload, validateImageFile } from "../image/validate";
+import {
+  MAX_IMAGES_PER_MESSAGE,
+  prepareImageForUpload,
+  validateImageFile,
+} from "../image/validate";
 
 const uid = () => `local_${Math.random().toString(36).slice(2, 10)}`;
 const newClientMessageId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const now = () => new Date().toISOString();
 
 interface ChatState {
@@ -43,19 +57,30 @@ let transport: ChatTransport;
 
 /** Exposed so the UI can label demo mode and tests can inject a transport. */
 export const getTransport = () => transport;
-export const __setTransportForTests = (t: ChatTransport) => { transport = t; };
+export const __setTransportForTests = (t: ChatTransport) => {
+  transport = t;
+};
 
 export const useChatStore = create<ChatState>((set, get) => {
-  transport = selectTransport(import.meta.env["VITE_API_BASE_URL"] as string | undefined, () => get().simulateFailure);
+  transport = selectTransport(
+    import.meta.env["VITE_API_BASE_URL"] as string | undefined,
+    () => get().simulateFailure,
+  );
 
   const updateConv = (convId: string, fn: (c: Conversation) => Conversation) =>
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === convId ? fn(c) : c)) }));
 
-  const patchMessage = (convId: string, msgId: string, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)) =>
+  const patchMessage = (
+    convId: string,
+    msgId: string,
+    patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>),
+  ) =>
     updateConv(convId, (c) => ({
       ...c,
       updatedAt: now(),
-      messages: c.messages.map((m) => (m.id !== msgId ? m : { ...m, ...(typeof patch === "function" ? patch(m) : patch) })),
+      messages: c.messages.map((m) =>
+        m.id !== msgId ? m : { ...m, ...(typeof patch === "function" ? patch(m) : patch) },
+      ),
     }));
 
   /**
@@ -76,38 +101,60 @@ export const useChatStore = create<ChatState>((set, get) => {
         set((s) => ({
           activeId: s.activeId === oldConv ? info.conversationId : s.activeId,
           conversations: s.conversations.map((c) =>
-            c.id !== oldConv ? c : {
-              ...c,
-              id: info.conversationId,
-              title: c.persisted ? c.title : info.title,
-              persisted: true,
-              messages: c.messages.map((m) =>
-                m.id === cur.userId ? { ...m, id: info.userMessageId, persisted: true }
-                : m.id === cur.assistantId ? { ...m, id: info.assistantMessageId, persisted: true, generationId: info.generationId }
-                : m),
-            }),
+            c.id !== oldConv
+              ? c
+              : {
+                  ...c,
+                  id: info.conversationId,
+                  title: c.persisted ? c.title : info.title,
+                  persisted: true,
+                  messages: c.messages.map((m) =>
+                    m.id === cur.userId
+                      ? { ...m, id: info.userMessageId, persisted: true }
+                      : m.id === cur.assistantId
+                        ? {
+                            ...m,
+                            id: info.assistantMessageId,
+                            persisted: true,
+                            generationId: info.generationId,
+                          }
+                        : m,
+                  ),
+                },
+          ),
         }));
         cur.convId = info.conversationId;
         cur.assistantId = info.assistantMessageId;
         cur.userId = info.userMessageId;
       },
-      onToken: (delta) => patchMessage(cur.convId, cur.assistantId, (m) => ({ content: m.content + delta })),
+      onToken: (delta) =>
+        patchMessage(cur.convId, cur.assistantId, (m) => ({ content: m.content + delta })),
     };
     let outcome: StreamOutcome;
     try {
       outcome = await call(handlers, controller.signal);
     } catch {
-      outcome = { type: "error", error: { code: "client_error", message: "Something went wrong.", retryable: true } };
+      outcome = {
+        type: "error",
+        error: { code: "client_error", message: "Something went wrong.", retryable: true },
+      };
     }
     if (outcome.type === "done") patchMessage(cur.convId, cur.assistantId, { status: "completed" });
-    else if (outcome.type === "cancelled") patchMessage(cur.convId, cur.assistantId, { status: "cancelled" });
+    else if (outcome.type === "cancelled")
+      patchMessage(cur.convId, cur.assistantId, { status: "cancelled" });
     else patchMessage(cur.convId, cur.assistantId, { status: "failed", error: outcome.error });
     controller = null;
     activeGenerationId = null;
     set({ isGenerating: false, isSubmitting: false });
   };
 
-  const toPending = (file: File): PendingAttachment => ({ id: uid(), file, previewUrl: URL.createObjectURL(file), progress: 0, state: "ready" });
+  const toPending = (file: File): PendingAttachment => ({
+    id: uid(),
+    file,
+    previewUrl: URL.createObjectURL(file),
+    progress: 0,
+    state: "ready",
+  });
   const setPending = (id: string, patch: Partial<PendingAttachment>) =>
     set((s) => ({ pending: s.pending.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
@@ -121,7 +168,11 @@ export const useChatStore = create<ChatState>((set, get) => {
       for (const p of todo) {
         setPending(p.id, { state: "uploading", progress: 0, error: undefined });
         const prepared = await prepareImageForUpload(p.file);
-        const uploaded = await transport.uploadImage(prepared, (pct) => setPending(p.id, { progress: pct }), controller.signal);
+        const uploaded = await transport.uploadImage(
+          prepared,
+          (pct) => setPending(p.id, { progress: pct }),
+          controller.signal,
+        );
         setPending(p.id, { state: "uploaded", progress: 100, uploaded });
       }
       return true;
@@ -130,7 +181,11 @@ export const useChatStore = create<ChatState>((set, get) => {
       const message = aborted ? undefined : e instanceof Error ? e.message : "Upload failed.";
       set((s) => ({
         attachError: message ?? null,
-        pending: s.pending.map((x) => (x.state === "uploading" ? { ...x, state: aborted ? "ready" : "error", progress: 0, error: message } : x)),
+        pending: s.pending.map((x) =>
+          x.state === "uploading"
+            ? { ...x, state: aborted ? "ready" : "error", progress: 0, error: message }
+            : x,
+        ),
       }));
       return false;
     } finally {
@@ -174,8 +229,12 @@ export const useChatStore = create<ChatState>((set, get) => {
         else accepted.push(toPending(f));
       }
       const room = MAX_IMAGES_PER_MESSAGE - get().pending.length;
-      if (accepted.length > room) errors.push(`You can attach up to ${MAX_IMAGES_PER_MESSAGE} images per message.`);
-      set((s) => ({ pending: [...s.pending, ...accepted.slice(0, Math.max(room, 0))], attachError: errors[0] ?? null }));
+      if (accepted.length > room)
+        errors.push(`You can attach up to ${MAX_IMAGES_PER_MESSAGE} images per message.`);
+      set((s) => ({
+        pending: [...s.pending, ...accepted.slice(0, Math.max(room, 0))],
+        attachError: errors[0] ?? null,
+      }));
     },
     removeAttachment: (id) =>
       set((s) => {
@@ -218,22 +277,56 @@ export const useChatStore = create<ChatState>((set, get) => {
         height: p.uploaded?.height,
       }));
       const clientMessageId = newClientMessageId();
-      const userMsg: ChatMessage = { id: uid(), role: "user", content: text, status: "completed", createdAt: now(), attachments, clientMessageId };
-      const assistant: ChatMessage = { id: uid(), role: "assistant", content: "", status: "streaming", createdAt: now() };
+      const userMsg: ChatMessage = {
+        id: uid(),
+        role: "user",
+        content: text,
+        status: "completed",
+        createdAt: now(),
+        attachments,
+        clientMessageId,
+      };
+      const assistant: ChatMessage = {
+        id: uid(),
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        createdAt: now(),
+      };
 
       const existing = get().conversations.find((c) => c.id === get().activeId);
       const convId = existing?.id ?? uid();
       if (!existing) {
-        const conv: Conversation = { id: convId, title: text ? text.slice(0, 42) : "Image analysis", updatedAt: now(), messages: [userMsg, assistant], persisted: false };
-        set((s) => ({ conversations: [conv, ...s.conversations], activeId: convId, pending: [], attachError: null }));
+        const conv: Conversation = {
+          id: convId,
+          title: text ? text.slice(0, 42) : "Image analysis",
+          updatedAt: now(),
+          messages: [userMsg, assistant],
+          persisted: false,
+        };
+        set((s) => ({
+          conversations: [conv, ...s.conversations],
+          activeId: convId,
+          pending: [],
+          attachError: null,
+        }));
       } else {
         set({ pending: [], attachError: null });
-        updateConv(convId, (c) => ({ ...c, updatedAt: now(), messages: [...c.messages, userMsg, assistant] }));
+        updateConv(convId, (c) => ({
+          ...c,
+          updatedAt: now(),
+          messages: [...c.messages, userMsg, assistant],
+        }));
       }
 
       await runStream({ convId, userId: userMsg.id, assistantId: assistant.id }, (h, signal) =>
         transport.sendMessage(
-          { conversationId: existing?.persisted ? convId : null, clientMessageId, content: text, attachmentIds: attachments.map((a) => a.id) },
+          {
+            conversationId: existing?.persisted ? convId : null,
+            clientMessageId,
+            content: text,
+            attachmentIds: attachments.map((a) => a.id),
+          },
           h,
           signal,
         ),
@@ -257,7 +350,9 @@ export const useChatStore = create<ChatState>((set, get) => {
 
       patchMessage(convId, assistantId, { status: "streaming", content: "", error: undefined });
       if (assistant.persisted) {
-        await runStream({ convId, userId: null, assistantId }, (h, signal) => transport.regenerate(assistantId, h, signal));
+        await runStream({ convId, userId: null, assistantId }, (h, signal) =>
+          transport.regenerate(assistantId, h, signal),
+        );
       } else {
         // Server never confirmed the message: resend with the same idempotency key.
         await runStream({ convId, userId: userMsg.id, assistantId }, (h, signal) =>

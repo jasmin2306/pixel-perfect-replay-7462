@@ -104,9 +104,21 @@ export interface SendMessageInput {
  */
 export interface ChatTransport {
   readonly isMock: boolean;
-  uploadImage(file: File, onProgress: (pct: number) => void, signal: AbortSignal): Promise<UploadedAttachment>;
-  sendMessage(input: SendMessageInput, handlers: StreamHandlers, signal: AbortSignal): Promise<StreamOutcome>;
-  regenerate(assistantMessageId: string, handlers: StreamHandlers, signal: AbortSignal): Promise<StreamOutcome>;
+  uploadImage(
+    file: File,
+    onProgress: (pct: number) => void,
+    signal: AbortSignal,
+  ): Promise<UploadedAttachment>;
+  sendMessage(
+    input: SendMessageInput,
+    handlers: StreamHandlers,
+    signal: AbortSignal,
+  ): Promise<StreamOutcome>;
+  regenerate(
+    assistantMessageId: string,
+    handlers: StreamHandlers,
+    signal: AbortSignal,
+  ): Promise<StreamOutcome>;
   /** Best-effort server-side cancel; the caller also aborts the request. */
   cancel(generationId: string): Promise<void>;
 }

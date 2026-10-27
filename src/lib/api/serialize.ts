@@ -1,18 +1,46 @@
 /** The only place that converts between API snake_case and UI camelCase. */
-import type { ChatErrorInfo, ChatMessage, Conversation, ImageAttachment, MessageCreatedInfo, SendMessageInput, UploadedAttachment } from "../chat/types";
 import type {
-  ApiAttachment, ApiConversationDetail, ApiConversationSummary, ApiErrorBody, ApiMessage,
-  ApiSendMessageRequest, ApiUploadResponse, SseMessageCreated,
+  ChatErrorInfo,
+  ChatMessage,
+  Conversation,
+  ImageAttachment,
+  MessageCreatedInfo,
+  SendMessageInput,
+  UploadedAttachment,
+} from "../chat/types";
+import type {
+  ApiAttachment,
+  ApiConversationDetail,
+  ApiConversationSummary,
+  ApiErrorBody,
+  ApiMessage,
+  ApiSendMessageRequest,
+  ApiUploadResponse,
+  SseMessageCreated,
 } from "./models";
 
-export const fromApiError = (e: ApiErrorBody): ChatErrorInfo => ({ code: e.code, message: e.message, retryable: e.retryable });
+export const fromApiError = (e: ApiErrorBody): ChatErrorInfo => ({
+  code: e.code,
+  message: e.message,
+  retryable: e.retryable,
+});
 
 export const fromApiAttachment = (a: ApiAttachment): ImageAttachment => ({
-  id: a.id, name: a.name ?? "image", size: a.size, mimeType: a.mime_type, previewUrl: a.url, width: a.width, height: a.height,
+  id: a.id,
+  name: a.name ?? "image",
+  size: a.size,
+  mimeType: a.mime_type,
+  previewUrl: a.url,
+  width: a.width,
+  height: a.height,
 });
 
 export const fromApiUpload = (u: ApiUploadResponse): UploadedAttachment => ({
-  attachmentId: u.attachment_id, mimeType: u.mime_type, width: u.width, height: u.height, size: u.size,
+  attachmentId: u.attachment_id,
+  mimeType: u.mime_type,
+  width: u.width,
+  height: u.height,
+  size: u.size,
 });
 
 export const fromApiMessage = (m: ApiMessage): ChatMessage => ({
@@ -27,11 +55,16 @@ export const fromApiMessage = (m: ApiMessage): ChatMessage => ({
 });
 
 export const fromApiConversationSummary = (c: ApiConversationSummary): Conversation => ({
-  id: c.id, title: c.title, updatedAt: c.updated_at, messages: [], persisted: true,
+  id: c.id,
+  title: c.title,
+  updatedAt: c.updated_at,
+  messages: [],
+  persisted: true,
 });
 
 export const fromApiConversationDetail = (c: ApiConversationDetail): Conversation => ({
-  ...fromApiConversationSummary(c), messages: c.messages.map(fromApiMessage),
+  ...fromApiConversationSummary(c),
+  messages: c.messages.map(fromApiMessage),
 });
 
 export const fromSseMessageCreated = (d: SseMessageCreated): MessageCreatedInfo => ({

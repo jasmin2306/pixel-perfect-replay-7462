@@ -15,11 +15,23 @@ const wait = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
     const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(t);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
   });
 
 export function createMockTransport(opts: { shouldFail: () => boolean }): ChatTransport {
-  async function streamDemo(text: string, handlers: StreamHandlers, signal: AbortSignal, created?: Parameters<StreamHandlers["onCreated"]>[0]): Promise<StreamOutcome> {
+  async function streamDemo(
+    text: string,
+    handlers: StreamHandlers,
+    signal: AbortSignal,
+    created?: Parameters<StreamHandlers["onCreated"]>[0],
+  ): Promise<StreamOutcome> {
     try {
       await wait(300, signal);
       if (created) handlers.onCreated(created);
@@ -27,7 +39,15 @@ export function createMockTransport(opts: { shouldFail: () => boolean }): ChatTr
       const words = text.split(/(\s+)/);
       const failAt = opts.shouldFail() ? Math.floor(words.length * 0.35) : -1;
       for (let i = 0; i < words.length; i++) {
-        if (i === failAt) return { type: "error", error: { code: "provider_unavailable", message: "Connection to the AI provider was lost (simulated).", retryable: true } };
+        if (i === failAt)
+          return {
+            type: "error",
+            error: {
+              code: "provider_unavailable",
+              message: "Connection to the AI provider was lost (simulated).",
+              retryable: true,
+            },
+          };
         handlers.onToken(words[i] ?? "");
         await wait(28, signal);
       }
@@ -44,20 +64,33 @@ export function createMockTransport(opts: { shouldFail: () => boolean }): ChatTr
         onProgress(p);
         await wait(120, signal);
       }
-      return { attachmentId: mockId("att"), mimeType: file.type, width: 0, height: 0, size: file.size };
+      return {
+        attachmentId: mockId("att"),
+        mimeType: file.type,
+        width: 0,
+        height: 0,
+        size: file.size,
+      };
     },
     sendMessage(input, handlers, signal) {
-      return streamDemo(input.attachmentIds.length ? DEMO_REPLY_IMAGE : DEMO_REPLY_TEXT, handlers, signal, {
-        conversationId: input.conversationId ?? mockId("conv"),
-        userMessageId: mockId("msg"),
-        assistantMessageId: mockId("msg"),
-        generationId: mockId("gen"),
-        title: input.content.trim().slice(0, 42) || "Image analysis",
-      });
+      return streamDemo(
+        input.attachmentIds.length ? DEMO_REPLY_IMAGE : DEMO_REPLY_TEXT,
+        handlers,
+        signal,
+        {
+          conversationId: input.conversationId ?? mockId("conv"),
+          userMessageId: mockId("msg"),
+          assistantMessageId: mockId("msg"),
+          generationId: mockId("gen"),
+          title: input.content.trim().slice(0, 42) || "Image analysis",
+        },
+      );
     },
     regenerate(_id, handlers, signal) {
       return streamDemo(DEMO_REPLY_TEXT, handlers, signal);
     },
-    async cancel() { /* demo: abort alone stops the stream */ },
+    async cancel() {
+      /* demo: abort alone stops the stream */
+    },
   };
 }
