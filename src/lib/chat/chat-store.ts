@@ -46,7 +46,7 @@ export const getTransport = () => transport;
 export const __setTransportForTests = (t: ChatTransport) => { transport = t; };
 
 export const useChatStore = create<ChatState>((set, get) => {
-  transport = selectTransport(import.meta.env.VITE_API_BASE_URL as string | undefined, () => get().simulateFailure);
+  transport = selectTransport(import.meta.env["VITE_API_BASE_URL"] as string | undefined, () => get().simulateFailure);
 
   const updateConv = (convId: string, fn: (c: Conversation) => Conversation) =>
     set((s) => ({ conversations: s.conversations.map((c) => (c.id === convId ? fn(c) : c)) }));

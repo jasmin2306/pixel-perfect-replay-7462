@@ -72,7 +72,7 @@ export function createHttpTransport(baseUrl: string): ChatTransport {
       const res = await fetch(`${base}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: `Bearer ${token}` },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? null : JSON.stringify(body),
         signal,
       });
       if (!res.ok || !res.body) return { type: "error", error: (await toApiError(res)).info };
