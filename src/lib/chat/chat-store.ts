@@ -1,10 +1,12 @@
 import { create } from "zustand";
-import type { ChatMessage, ChatTransport, Conversation, ImageAttachment, PendingAttachment } from "./types";
+import type { ChatMessage, ChatTransport, Conversation, ImageAttachment, PendingAttachment, StreamHandlers, StreamOutcome } from "./types";
 import { sampleConversations } from "./mock/sample-conversations";
-import { createMockTransport } from "./mock/mock-transport";
+import { selectTransport } from "./transport";
 import { MAX_IMAGES_PER_MESSAGE, prepareImageForUpload, validateImageFile } from "../image/validate";
 
-const uid = () => Math.random().toString(36).slice(2, 10);
+const uid = () => `local_${Math.random().toString(36).slice(2, 10)}`;
+const newClientMessageId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const now = () => new Date().toISOString();
 
 interface ChatState {
@@ -12,6 +14,8 @@ interface ChatState {
   activeId: string | null;
   pending: PendingAttachment[];
   attachError: string | null;
+  /** True from the moment Send is pressed until the stream ends; blocks duplicate submits. */
+  isSubmitting: boolean;
   isGenerating: boolean;
   isUploading: boolean;
   isLoadingConversation: boolean;
@@ -34,51 +38,113 @@ interface ChatState {
 }
 
 let controller: AbortController | null = null;
+let activeGenerationId: string | null = null;
 let transport: ChatTransport;
 
+/** Exposed so the UI can label demo mode and tests can inject a transport. */
+export const getTransport = () => transport;
+export const __setTransportForTests = (t: ChatTransport) => { transport = t; };
+
 export const useChatStore = create<ChatState>((set, get) => {
-  transport = createMockTransport({ shouldFail: () => get().simulateFailure });
+  transport = selectTransport(import.meta.env.VITE_API_BASE_URL as string | undefined, () => get().simulateFailure);
+
+  const updateConv = (convId: string, fn: (c: Conversation) => Conversation) =>
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === convId ? fn(c) : c)) }));
 
   const patchMessage = (convId: string, msgId: string, patch: Partial<ChatMessage> | ((m: ChatMessage) => Partial<ChatMessage>)) =>
-    set((s) => ({
-      conversations: s.conversations.map((c) =>
-        c.id !== convId ? c : {
-          ...c,
-          updatedAt: now(),
-          messages: c.messages.map((m) => (m.id !== msgId ? m : { ...m, ...(typeof patch === "function" ? patch(m) : patch) })),
-        },
-      ),
+    updateConv(convId, (c) => ({
+      ...c,
+      updatedAt: now(),
+      messages: c.messages.map((m) => (m.id !== msgId ? m : { ...m, ...(typeof patch === "function" ? patch(m) : patch) })),
     }));
 
-  const runReply = async (convId: string, assistantId: string, prompt: string, hasImages: boolean) => {
+  /**
+   * Runs one stream and applies its events. Server ids from `message.created`
+   * replace local ids; the closure tracks the current ids.
+   */
+  const runStream = async (
+    ids: { convId: string; userId: string | null; assistantId: string },
+    call: (h: StreamHandlers, signal: AbortSignal) => Promise<StreamOutcome>,
+  ) => {
     controller = new AbortController();
-    set({ isGenerating: true });
+    set({ isGenerating: true, isSubmitting: true });
+    const cur = { ...ids };
+    const handlers: StreamHandlers = {
+      onCreated: (info) => {
+        activeGenerationId = info.generationId;
+        const oldConv = cur.convId;
+        set((s) => ({
+          activeId: s.activeId === oldConv ? info.conversationId : s.activeId,
+          conversations: s.conversations.map((c) =>
+            c.id !== oldConv ? c : {
+              ...c,
+              id: info.conversationId,
+              title: c.persisted ? c.title : info.title,
+              persisted: true,
+              messages: c.messages.map((m) =>
+                m.id === cur.userId ? { ...m, id: info.userMessageId, persisted: true }
+                : m.id === cur.assistantId ? { ...m, id: info.assistantMessageId, persisted: true, generationId: info.generationId }
+                : m),
+            }),
+        }));
+        cur.convId = info.conversationId;
+        cur.assistantId = info.assistantMessageId;
+        cur.userId = info.userMessageId;
+      },
+      onToken: (delta) => patchMessage(cur.convId, cur.assistantId, (m) => ({ content: m.content + delta })),
+    };
+    let outcome: StreamOutcome;
     try {
-      await transport.streamReply(
-        { conversationId: convId, prompt, hasImages },
-        (tok) => patchMessage(convId, assistantId, (m) => ({ content: m.content + tok })),
-        controller.signal,
-      );
-      patchMessage(convId, assistantId, { status: "completed" });
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") {
-        patchMessage(convId, assistantId, { status: "cancelled" });
-      } else {
-        patchMessage(convId, assistantId, { status: "failed", error: e instanceof Error ? e.message : "Something went wrong." });
-      }
-    } finally {
-      controller = null;
-      set({ isGenerating: false });
+      outcome = await call(handlers, controller.signal);
+    } catch {
+      outcome = { type: "error", error: { code: "client_error", message: "Something went wrong.", retryable: true } };
     }
+    if (outcome.type === "done") patchMessage(cur.convId, cur.assistantId, { status: "completed" });
+    else if (outcome.type === "cancelled") patchMessage(cur.convId, cur.assistantId, { status: "cancelled" });
+    else patchMessage(cur.convId, cur.assistantId, { status: "failed", error: outcome.error });
+    controller = null;
+    activeGenerationId = null;
+    set({ isGenerating: false, isSubmitting: false });
   };
 
   const toPending = (file: File): PendingAttachment => ({ id: uid(), file, previewUrl: URL.createObjectURL(file), progress: 0, state: "ready" });
+  const setPending = (id: string, patch: Partial<PendingAttachment>) =>
+    set((s) => ({ pending: s.pending.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
+
+  /** Uploads every pending image not yet uploaded. Returns false if cancelled or failed. */
+  const uploadPending = async (): Promise<boolean> => {
+    const todo = get().pending.filter((p) => !p.uploaded);
+    if (!todo.length) return true;
+    set({ isUploading: true, attachError: null });
+    controller = new AbortController();
+    try {
+      for (const p of todo) {
+        setPending(p.id, { state: "uploading", progress: 0, error: undefined });
+        const prepared = await prepareImageForUpload(p.file);
+        const uploaded = await transport.uploadImage(prepared, (pct) => setPending(p.id, { progress: pct }), controller.signal);
+        setPending(p.id, { state: "uploaded", progress: 100, uploaded });
+      }
+      return true;
+    } catch (e) {
+      const aborted = e instanceof DOMException && e.name === "AbortError";
+      const message = aborted ? undefined : e instanceof Error ? e.message : "Upload failed.";
+      set((s) => ({
+        attachError: message ?? null,
+        pending: s.pending.map((x) => (x.state === "uploading" ? { ...x, state: aborted ? "ready" : "error", progress: 0, error: message } : x)),
+      }));
+      return false;
+    } finally {
+      controller = null;
+      set({ isUploading: false });
+    }
+  };
 
   return {
     conversations: sampleConversations,
     activeId: null,
     pending: [],
     attachError: null,
+    isSubmitting: false,
     isGenerating: false,
     isUploading: false,
     isLoadingConversation: false,
@@ -87,11 +153,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     sidebarCollapsed: false,
 
     newChat: () => {
-      if (get().isGenerating) get().stop();
+      if (get().isSubmitting) get().stop();
       set({ activeId: null, mobileNavOpen: false, attachError: null });
     },
     selectConversation: (id) => {
-      if (get().isGenerating) get().stop();
+      if (get().isSubmitting) get().stop();
       set({ activeId: id, mobileNavOpen: false, isLoadingConversation: true });
       // Simulated fetch latency so the skeleton state is visible (demo only).
       setTimeout(() => set({ isLoadingConversation: false }), 450);
@@ -132,69 +198,81 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     send: async (prompt) => {
       const text = prompt.trim();
-      const { pending, isGenerating, isUploading } = get();
-      if ((!text && pending.length === 0) || isGenerating || isUploading) return;
+      const { pending, isSubmitting, isGenerating, isUploading } = get();
+      if ((!text && pending.length === 0) || isSubmitting || isGenerating || isUploading) return;
+      set({ isSubmitting: true });
 
-      // 1. Upload (simulated) with per-file progress
-      if (pending.length) {
-        set({ isUploading: true });
-        controller = new AbortController();
-        try {
-          for (const p of pending) {
-            const prepared = await prepareImageForUpload(p.file);
-            set((s) => ({ pending: s.pending.map((x) => (x.id === p.id ? { ...x, state: "uploading" } : x)) }));
-            await transport.uploadImage(prepared, (pct) =>
-              set((s) => ({ pending: s.pending.map((x) => (x.id === p.id ? { ...x, progress: pct } : x)) })), controller.signal);
-            set((s) => ({ pending: s.pending.map((x) => (x.id === p.id ? { ...x, state: "uploaded", progress: 100 } : x)) }));
-          }
-        } catch {
-          set((s) => ({ isUploading: false, pending: s.pending.map((x) => (x.state === "uploading" ? { ...x, state: "ready", progress: 0 } : x)) }));
-          controller = null;
-          return;
-        }
-        controller = null;
-        set({ isUploading: false });
+      if (!(await uploadPending())) {
+        set({ isSubmitting: false });
+        return;
       }
 
-      const attachments: ImageAttachment[] = get().pending.map((p) => ({
-        id: p.id, name: p.file.name, size: p.file.size, mimeType: p.file.type, previewUrl: p.previewUrl,
+      const sent = get().pending;
+      const attachments: ImageAttachment[] = sent.map((p) => ({
+        id: p.uploaded?.attachmentId ?? p.id,
+        name: p.file.name,
+        size: p.file.size,
+        mimeType: p.uploaded?.mimeType ?? p.file.type,
+        previewUrl: p.previewUrl,
+        width: p.uploaded?.width,
+        height: p.uploaded?.height,
       }));
-      const userMsg: ChatMessage = { id: uid(), role: "user", content: text, status: "completed", createdAt: now(), attachments };
+      const clientMessageId = newClientMessageId();
+      const userMsg: ChatMessage = { id: uid(), role: "user", content: text, status: "completed", createdAt: now(), attachments, clientMessageId };
       const assistant: ChatMessage = { id: uid(), role: "assistant", content: "", status: "streaming", createdAt: now() };
 
-      let convId = get().activeId;
-      if (!convId) {
-        convId = uid();
-        const conv: Conversation = {
-          id: convId,
-          title: text ? text.slice(0, 42) : "Image analysis",
-          updatedAt: now(),
-          messages: [userMsg, assistant],
-        };
+      const existing = get().conversations.find((c) => c.id === get().activeId);
+      const convId = existing?.id ?? uid();
+      if (!existing) {
+        const conv: Conversation = { id: convId, title: text ? text.slice(0, 42) : "Image analysis", updatedAt: now(), messages: [userMsg, assistant], persisted: false };
         set((s) => ({ conversations: [conv, ...s.conversations], activeId: convId, pending: [], attachError: null }));
       } else {
-        const id = convId;
-        set((s) => ({
-          pending: [],
-          attachError: null,
-          conversations: s.conversations.map((c) => (c.id === id ? { ...c, updatedAt: now(), messages: [...c.messages, userMsg, assistant] } : c)),
-        }));
+        set({ pending: [], attachError: null });
+        updateConv(convId, (c) => ({ ...c, updatedAt: now(), messages: [...c.messages, userMsg, assistant] }));
       }
-      await runReply(convId, assistant.id, text, attachments.length > 0);
+
+      await runStream({ convId, userId: userMsg.id, assistantId: assistant.id }, (h, signal) =>
+        transport.sendMessage(
+          { conversationId: existing?.persisted ? convId : null, clientMessageId, content: text, attachmentIds: attachments.map((a) => a.id) },
+          h,
+          signal,
+        ),
+      );
     },
 
-    stop: () => controller?.abort(),
+    stop: () => {
+      if (activeGenerationId) void transport.cancel(activeGenerationId);
+      controller?.abort();
+    },
 
     retry: async (assistantId) => {
       const convId = get().activeId;
-      if (!convId || get().isGenerating) return;
+      if (!convId || get().isSubmitting) return;
       const conv = get().conversations.find((c) => c.id === convId);
       const idx = conv?.messages.findIndex((m) => m.id === assistantId) ?? -1;
-      if (!conv || idx < 1) return;
-      const userMsg = conv.messages[idx - 1];
-      if (!userMsg) return;
+      const assistant = conv?.messages[idx];
+      const userMsg = conv?.messages[idx - 1];
+      if (!conv || !assistant || !userMsg) return;
+      if (assistant.status === "failed" && assistant.error && !assistant.error.retryable) return;
+
       patchMessage(convId, assistantId, { status: "streaming", content: "", error: undefined });
-      await runReply(convId, assistantId, userMsg.content, (userMsg.attachments?.length ?? 0) > 0);
+      if (assistant.persisted) {
+        await runStream({ convId, userId: null, assistantId }, (h, signal) => transport.regenerate(assistantId, h, signal));
+      } else {
+        // Server never confirmed the message: resend with the same idempotency key.
+        await runStream({ convId, userId: userMsg.id, assistantId }, (h, signal) =>
+          transport.sendMessage(
+            {
+              conversationId: conv.persisted ? convId : null,
+              clientMessageId: userMsg.clientMessageId ?? newClientMessageId(),
+              content: userMsg.content,
+              attachmentIds: (userMsg.attachments ?? []).map((a) => a.id),
+            },
+            h,
+            signal,
+          ),
+        );
+      }
     },
 
     setSimulateFailure: (v) => set({ simulateFailure: v }),
@@ -202,5 +280,3 @@ export const useChatStore = create<ChatState>((set, get) => {
     toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   };
 });
-
-export const isMockTransport = () => transport.isMock;
